@@ -1,8 +1,7 @@
-displayName: Bulk Redirects
+displayName: Bulk Redirects with Regex
 type: middleware
-iconPath: .assets/icon.png
 
-import: github.com/DoodleScheduling/traefik-bulk-redirects
+import: github.com/ro0p/traefik-bulk-redirects
 
 summary: Middleware for Cloudflare-style bulk redirects.
 
@@ -19,3 +18,9 @@ testData:
       statusCode: 301
       preserveQueryString: true
       subpathMatching: true
+
+    - sourceURL: https?://(www\\.)?example\\.com/legacy/?$
+      targetURL: https://example.com/new
+      statusCode: 301
+      preserveQueryString: false
+      regex: true

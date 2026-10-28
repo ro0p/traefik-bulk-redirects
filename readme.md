@@ -1,37 +1,49 @@
-# Traefik Plugin Bulk Redirects
+Traefik Plugin Bulk Redirects with Regex
 
-[![release](https://img.shields.io/github/release/DoodleScheduling/traefik-bulk-redirects/all.svg)](https://github.com/DoodleScheduling/traefik-bulk-redirects/releases)
-[![report](https://goreportcard.com/badge/github.com/DoodleScheduling/traefik-bulk-redirects)](https://goreportcard.com/report/github.com/DoodleScheduling/traefik-bulk-redirects)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/DoodleScheduling/traefik-bulk-redirects/badge)](https://api.securityscorecards.dev/projects/github.com/DoodleScheduling/traefik-bulk-redirects)
-[![Coverage Status](https://coveralls.io/repos/github/DoodleScheduling/traefik-bulk-redirects/badge.svg?branch=master)](https://coveralls.io/github/DoodleScheduling/traefik-bulk-redirects?branch=master)
-[![license](https://img.shields.io/github/license/DoodleScheduling/traefik-bulk-redirects.svg)](https://github.com/DoodleScheduling/traefik-bulk-redirects/blob/master/LICENSE)
+A Traefik middleware plugin for Cloudflare-style bulk redirects and regex support.
 
-A Traefik middleware plugin for Cloudflare-style bulk redirects. 
-It allows defining multiple redirects in a single Traefik Middleware configuration.
-This plugin supports exact redirects, subpath redirects, query string preservation, and configurable redirect status codes.
+It allows defining multiple redirects in a single Traefik Middleware configuration. The plugin supports exact redirects, subpath redirects, regular-expression matching, query string preservation, and configurable redirect status codes.
 
-# Redirect fields
+Redirect fields
+Key	Description
+sourceURL	Absolute source URL to match. When regex is enabled, this field is interpreted as a Go regular expression instead of a literal URL.
+targetURL	Absolute redirect destination URL.
+statusCode	Redirect status code: 301, 302, 303, 307, or 308. Defaults to 301.
+preserveQueryString	When enabled, appends the original request query string to the target URL.
+subpathMatching	When enabled, matches the source path and its child paths. Applies to non-regex rules.
+regex	When enabled, interprets sourceURL as a Go regular expression. Defaults to false.
+Matching behavior
 
-| Key | Description |
-| --- | --- |
-| `sourceURL` | absolute source URL to match |
-| `targetURL` | absolute redirect destination URL |
-| `statusCode` | redirect status code: `301`, `302`, `303`, `307`, `308` |
-| `preserveQueryString` | `enabled` appends the original query string to the target URL |
-| `subpathMatching` | `enabled` matches the source path and all child paths below it |
+The plugin supports three types of redirect rules:
 
-# Configuration modes
+Exact matching: Matches a specific source host and path.
+Subpath matching: Matches a source path and its descendants, preserving the unmatched path suffix in the destination.
+Regex matching: Matches requests using a Go regular expression configured in sourceURL.
 
-The plugin supports `inline` and `file` configuration. Inline mode is backwards-compatible and convenient for small rulesets. File mode is recommended for large rulesets and global middlewares because the parsed and compiled redirects are shared by file path for the lifetime of the Traefik process.
+Regex rules are evaluated before exact and subpath rules. The first matching regex rule wins, so put more specific regex rules before broader ones.
 
-## Inline mode
+For example, the following rule redirects both example.com and www.example.com to the same destination:
 
-Inline mode embeds redirects in the Middleware resource. It is selected when `mode` is omitted or set to `inline`.
-
-Existing configurations do not need to change:
+yaml
+- sourceURL: 'https?://(www\.)?example\.com/old/?$'
+  targetURL: https://example.com/new
+  statusCode: 301
+  regex: true
 
 
-```yaml
+Regular expressions use Go's RE2 syntax. Features such as lookahead and lookbehind are not supported.
+
+When regex is disabled or omitted, sourceURL retains its normal absolute-URL validation and exact/subpath matching behavior.
+
+Configuration modes
+
+The plugin supports inline and file configuration. Inline mode is backwards-compatible and convenient for small rulesets. File mode is recommended for large rulesets and global middlewares because parsed and compiled redirects are shared by file path for the lifetime of the Traefik process.
+
+Inline mode
+
+Inline mode embeds redirects in the Middleware resource. It is selected when mode is omitted or set to inline.
+
+yaml
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -41,31 +53,41 @@ spec:
     bulkRedirects:
       # mode: inline # Optional; inline is the default.
       redirects:
-      - sourceURL: https://example.com/premium/coupon
-        targetURL: https://example.com/en/premium/
-        statusCode: 302
-        preserveQueryString: enabled
-        subpathMatching: disabled
-      - sourceURL: https://example.com/docs
-        targetURL: https://example.com/en/resources
-        statusCode: 301
-        preserveQueryString: enabled
-        subpathMatching: enabled
-```
+        - sourceURL: https://example.com/premium/coupon
+          targetURL: https://example.com/en/premium/
+          statusCode: 302
+          preserveQueryString: true
+          subpathMatching: false
+
+        - sourceURL: https://example.com/docs
+          targetURL: https://example.com/en/resources
+          statusCode: 301
+          preserveQueryString: true
+          subpathMatching: true
+
+        - sourceURL: 'https?://(www\.)?example\.com/old/?$'
+          targetURL: https://example.com/new
+          statusCode: 301
+          preserveQueryString: false
+          regex: true
+
+
+In YAML, quote regular expressions that contain backslashes. Single-quoted YAML strings preserve backslashes literally, avoiding errors such as found unknown escape character.
 
 Inline mode is simple, but Traefik must decode the complete redirect list for every middleware instance. Prefer file mode for large rulesets.
 
-## File mode
+File mode
 
-File mode loads redirects from a JSON file mounted in the Traefik container. The first `New()` call for a new `filePath` reads, decodes, validates and compiles the file. Compiled file-based rulesets are cached by file path for the lifetime of the Traefik process. Subsequent middleware instances using that path reuse the exact compiled ruleset from memory. Cached middleware construction performs no filesystem reads or stats, hashing, JSON decoding, redirect validation or recompilation.
+File mode loads redirects from a JSON file mounted in the Traefik container. The first New() call for a new filePath reads, decodes, validates, and compiles the file. Compiled file-based rulesets are cached by file path for the lifetime of the Traefik process.
 
-File contents are considered immutable for the lifetime of the Traefik process. The plugin intentionally does not watch the file or detect in-place changes. Replacing or modifying a file at the same `filePath` does not update the redirects used by the running process. To apply new rules, start a new Traefik process, for example through a restart or rolling deployment. The new process starts with an empty plugin cache and loads the current rules file once.
+Subsequent middleware instances using that path reuse the compiled ruleset from memory. Cached middleware construction performs no filesystem reads or stats, hashing, JSON decoding, redirect validation, or recompilation.
+
+File contents are considered immutable for the lifetime of the Traefik process. The plugin intentionally does not watch the file or detect in-place changes. Replacing or modifying a file at the same filePath does not update redirects used by the running process. To apply new rules, start a new Traefik process, for example through a restart or rolling deployment.
 
 The path must be absolute. File mode accepts only regular files with a maximum size of 16 MiB (16,777,216 bytes). Directories, pipes, devices, sockets, and other special files are rejected.
 
-### Redirect file
-
-```json
+Redirect file
+json
 {
   "redirects": [
     {
@@ -73,17 +95,24 @@ The path must be absolute. File mode accepts only regular files with a maximum s
       "targetURL": "https://example.com/new",
       "statusCode": 301,
       "preserveQueryString": true,
-      "subpathMatching": false
+      "subpathMatching": false,
+      "regex": false
+    },
+    {
+      "sourceURL": "https?://(www\\.)?example\\.com/legacy/?$",
+      "targetURL": "https://example.com/new",
+      "statusCode": 301,
+      "preserveQueryString": false,
+      "regex": true
     }
   ]
 }
-```
 
-Only the `redirects` field is accepted in this file. Configuration fields such as `mode` and `filePath` belong in the Middleware resource.
 
-### Middleware
+In JSON strings, backslashes must be escaped as \\. Only the redirects field is accepted in this file. Configuration fields such as mode and filePath belong in the Middleware resource.
 
-```yaml
+Middleware
+yaml
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -93,48 +122,27 @@ spec:
     bulkRedirects:
       mode: file
       filePath: /etc/traefik/bulk-redirects/redirects.json
-```
 
-### Kubernetes deployment example
+Kubernetes deployment example
 
-The lifecycle described above is the plugin contract and is independent of any deployment platform. The plugin does not call Kubernetes APIs. In Kubernetes, the rules file must be mounted into every Traefik pod by the deployment configuration.
+The lifecycle described above is independent of the deployment platform. The plugin does not call Kubernetes APIs. In Kubernetes, the rules file must be mounted into every Traefik pod by the deployment configuration.
 
 A content-addressed ConfigMap can connect a rules change to the required Traefik rollout. For example, Kustomize adds a content hash to generated ConfigMap names by default:
 
-```yaml
+yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 configMapGenerator:
-- name: bulk-redirect-rules
-  files:
-  - redirects.json
-```
+  - name: bulk-redirect-rules
+    files:
+      - redirects.json
 
-This produces a ConfigMap such as `bulk-redirect-rules-<content-hash>`:
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: bulk-redirect-rules-<content-hash>
-data:
-  redirects.json: |
-    {
-      "redirects": [
-        {
-          "sourceURL": "https://example.com/old",
-          "targetURL": "https://example.com/new",
-          "statusCode": 301,
-          "preserveQueryString": true,
-          "subpathMatching": false
-        }
-      ]
-    }
-```
+This produces a ConfigMap such as bulk-redirect-rules-<content-hash>.
 
 Reference the generated ConfigMap from the Traefik Deployment or HelmRelease. A Deployment fragment can use the generator's base name because Kustomize updates known ConfigMap references to the generated name:
 
-```yaml
+yaml
 spec:
   template:
     spec:
@@ -148,18 +156,17 @@ spec:
         - name: bulk-redirect-rules
           configMap:
             name: bulk-redirect-rules
-```
 
-### Updating file-based rules
+Updating file-based rules
 
-When `redirects.json` changes, Kustomize generates a different ConfigMap name. Propagating that name into the Deployment PodTemplate, directly or through HelmRelease values, triggers a rolling update. Each new Traefik process starts with an empty plugin cache and loads the new ruleset on first use. Because HelmRelease is a custom resource, its nested ConfigMap references may require a Kustomize `nameReference` configuration rather than relying on the built-in Deployment field handling.
+When redirects.json changes, Kustomize generates a different ConfigMap name. Propagating that name into the Deployment PodTemplate, directly or through HelmRelease values, triggers a rolling update.
 
-# Static configuration
+Each new Traefik process starts with an empty plugin cache and loads the new ruleset on first use. Because HelmRelease is a custom resource, its nested ConfigMap references may require a Kustomize nameReference configuration rather than relying on the built-in Deployment field handling.
 
-```yaml
+Static configuration
+yaml
 experimental:
   plugins:
     bulkRedirects:
-      moduleName: github.com/doodlescheduling/traefik-bulk-redirects
+      moduleName: github.com/ro0p/traefik-bulk-redirects
       version: v0.0.1
-```

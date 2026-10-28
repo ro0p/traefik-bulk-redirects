@@ -610,6 +610,7 @@ func TestRelevantRedirectFieldsInvalidateCache(t *testing.T) {
 		{name: "status code", change: func(r *Redirect) { r.StatusCode = http.StatusTemporaryRedirect }},
 		{name: "preserve query string", change: func(r *Redirect) { r.PreserveQueryString = !r.PreserveQueryString }},
 		{name: "subpath matching", change: func(r *Redirect) { r.SubpathMatching = !r.SubpathMatching }},
+		{name: "regex", change: func(r *Redirect) { r.Regex = !r.Regex }},
 	}
 
 	for _, tt := range tests {
@@ -663,6 +664,7 @@ func TestConfigHashIncludesEveryRedirectField(t *testing.T) {
 		{name: "status code", change: func(r *Redirect) { r.StatusCode = http.StatusTemporaryRedirect }},
 		{name: "preserve query string", change: func(r *Redirect) { r.PreserveQueryString = !r.PreserveQueryString }},
 		{name: "subpath matching", change: func(r *Redirect) { r.SubpathMatching = !r.SubpathMatching }},
+		{name: "regex", change: func(r *Redirect) { r.Regex = !r.Regex }},
 	}
 
 	for _, tt := range tests {
@@ -745,6 +747,7 @@ func previousConfigHash(config *Config) [sha256.Size]byte {
 		writeUint64(uint64(redirect.StatusCode))
 		writeBool(redirect.PreserveQueryString)
 		writeBool(redirect.SubpathMatching)
+		writeBool(redirect.Regex)
 	}
 
 	var result [sha256.Size]byte
@@ -1397,4 +1400,246 @@ func assertErrorContains(t *testing.T, err error, expected string) {
 	if !strings.Contains(err.Error(), expected) {
 		t.Fatalf("expected error to contain %q, got %q", expected, err.Error())
 	}
+}
+
+func TestRegexRedirectMatchesHostnameWithAndWithoutWWW(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:  `^(?:www\.)?biztonsagosezalink\.hu/`,
+			TargetURL:  "https://www.eset.com/hu/otthoni/link-ellenorzo/?utm_source=biztonsagosezalink.hu&utm_medium=link&utm_campaign=Linkellenorzo",
+			Regex:      true,
+			StatusCode: http.StatusMovedPermanently,
+		},
+	})
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{
+			name: "bare hostname",
+			url:  "https://biztonsagosezalink.hu/",
+		},
+		{
+			name: "www hostname",
+			url:  "https://www.biztonsagosezalink.hu/",
+		},
+		{
+			name: "nested path",
+			url:  "https://www.biztonsagosezalink.hu/some/path",
+		},
+		{
+			name: "http request",
+			url:  "http://biztonsagosezalink.hu/",
+		},
+	}
+
+	wantLocation := "https://www.eset.com/hu/otthoni/link-ellenorzo/?utm_source=biztonsagosezalink.hu&utm_medium=link&utm_campaign=Linkellenorzo"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+
+			handler.ServeHTTP(rec, req)
+
+			assertStatus(t, rec, http.StatusMovedPermanently)
+			assertLocation(t, rec, wantLocation)
+		})
+	}
+}
+
+func TestRegexRedirectDoesNotMatchDifferentHostname(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:  `^(?:www\.)?biztonsagosezalink\.hu/`,
+			TargetURL:  "https://www.eset.com/target",
+			Regex:      true,
+			StatusCode: http.StatusMovedPermanently,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://not-biztonsagosezalink.hu/",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusTeapot)
+}
+
+func TestRegexRedirectDoesNotMatchSimilarHostname(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:  `^biztonsagosezalink\.hu/`,
+			TargetURL:  "https://www.eset.com/target",
+			Regex:      true,
+			StatusCode: http.StatusMovedPermanently,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://biztonsagosezalink.hu.evil.example/",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusTeapot)
+}
+
+func TestRegexRedirectPreservesQueryString(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:           `^example\.com/docs`,
+			TargetURL:           "https://destination.example/resources?source=legacy",
+			Regex:               true,
+			StatusCode:          http.StatusFound,
+			PreserveQueryString: true,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://example.com/docs?utm_source=test",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusFound)
+	assertLocation(
+		t,
+		rec,
+		"https://destination.example/resources?source=legacy&utm_source=test",
+	)
+}
+
+func TestRegexRedirectDoesNotPreserveQueryStringWhenDisabled(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:           `^example\.com/docs`,
+			TargetURL:           "https://destination.example/resources?source=legacy",
+			Regex:               true,
+			StatusCode:          http.StatusFound,
+			PreserveQueryString: false,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://example.com/docs?utm_source=test",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusFound)
+	assertLocation(
+		t,
+		rec,
+		"https://destination.example/resources?source=legacy",
+	)
+}
+
+func TestRegexRedirectUsesDefaultStatusCode(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL: `^example\.com/docs`,
+			TargetURL: "https://destination.example/resources",
+			Regex:     true,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://example.com/docs",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusMovedPermanently)
+	assertLocation(t, rec, "https://destination.example/resources")
+}
+
+func TestNewReturnsErrorForInvalidSourceURLRegex(t *testing.T) {
+	_, err := New(context.Background(), nextHandler(), &Config{
+		Redirects: []Redirect{
+			{
+				SourceURL:  `^(example\.com$`,
+				TargetURL:  "https://destination.example/target",
+				Regex:      true,
+				StatusCode: http.StatusMovedPermanently,
+			},
+		},
+	}, "bulk-redirects")
+
+	assertErrorContains(t, err, "invalid sourceURL regex")
+}
+
+func TestRegexRedirectHasPriorityOverExactRedirect(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:  `^example\.com/docs`,
+			TargetURL:  "https://destination.example/regex",
+			Regex:      true,
+			StatusCode: http.StatusFound,
+		},
+		{
+			SourceURL:  "https://example.com/docs",
+			TargetURL:  "https://destination.example/exact",
+			StatusCode: http.StatusMovedPermanently,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://example.com/docs",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	// Regex rules are checked before exact rules in ServeHTTP.
+	assertStatus(t, rec, http.StatusFound)
+	assertLocation(t, rec, "https://destination.example/regex")
+}
+
+func TestRegexRedirectRulesAreCheckedInConfigurationOrder(t *testing.T) {
+	handler := newTestHandler(t, []Redirect{
+		{
+			SourceURL:  `^example\.com/`,
+			TargetURL:  "https://destination.example/first",
+			Regex:      true,
+			StatusCode: http.StatusFound,
+		},
+		{
+			SourceURL:  `^example\.com/docs`,
+			TargetURL:  "https://destination.example/second",
+			Regex:      true,
+			StatusCode: http.StatusMovedPermanently,
+		},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"https://example.com/docs",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assertStatus(t, rec, http.StatusFound)
+	assertLocation(t, rec, "https://destination.example/first")
 }

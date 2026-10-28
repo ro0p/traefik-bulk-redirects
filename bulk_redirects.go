@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -29,6 +30,12 @@ type Redirect struct {
 	StatusCode          int    `json:"statusCode,omitempty"`
 	PreserveQueryString bool   `json:"preserveQueryString,omitempty"`
 	SubpathMatching     bool   `json:"subpathMatching,omitempty"`
+	Regex               bool   `json:"regex,omitempty"`
+}
+
+type RegexRedirect struct {
+	Pattern *regexp.Regexp
+	Target  Target
 }
 
 type Target struct {
@@ -45,6 +52,7 @@ type PrefixRedirect struct {
 type compiledRedirects struct {
 	exactRedirects  map[string]Target
 	prefixRedirects map[string]PrefixRedirect
+	regexRedirects  []RegexRedirect
 }
 
 const (
@@ -247,6 +255,7 @@ func newHandler(next http.Handler, name string, compiled *compiledRedirects) *Bu
 func compileRedirects(redirects []Redirect) (*compiledRedirects, error) {
 	exactRedirects := make(map[string]Target, len(redirects))
 	prefixRedirects := make(map[string]PrefixRedirect)
+	regexRedirects := make([]RegexRedirect, 0)
 
 	for _, redirect := range redirects {
 		if redirect.StatusCode == 0 {
@@ -255,6 +264,44 @@ func compileRedirects(redirects []Redirect) (*compiledRedirects, error) {
 
 		if redirect.SourceURL == "" {
 			return nil, fmt.Errorf("sourceURL is required")
+		}
+
+		if redirect.Regex {
+			if redirect.TargetURL == "" {
+				return nil, fmt.Errorf("targetURL is required for regex %q", redirect.SourceURL)
+			}
+
+			if err := validateTargetURL(redirect.TargetURL); err != nil {
+				return nil, fmt.Errorf(
+					"invalid targetURL %q for regex %q: %w",
+					redirect.TargetURL, redirect.SourceURL, err,
+				)
+			}
+
+			if !isValidRedirectStatusCode(redirect.StatusCode) {
+				return nil, fmt.Errorf(
+					"invalid statusCode %d for regex %q",
+					redirect.StatusCode, redirect.SourceURL,
+				)
+			}
+
+			pattern, err := regexp.Compile(redirect.SourceURL)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"invalid sourceURL regex %q: %w",
+					redirect.SourceURL, err,
+				)
+			}
+
+			regexRedirects = append(regexRedirects, RegexRedirect{
+				Pattern: pattern,
+				Target: Target{
+					URL:                 redirect.TargetURL,
+					StatusCode:          redirect.StatusCode,
+					PreserveQueryString: redirect.PreserveQueryString,
+				},
+			})
+			continue
 		}
 
 		sourceHost, sourcePath, err := parseSourceURL(redirect.SourceURL)
@@ -296,6 +343,7 @@ func compileRedirects(redirects []Redirect) (*compiledRedirects, error) {
 	return &compiledRedirects{
 		exactRedirects:  exactRedirects,
 		prefixRedirects: prefixRedirects,
+		regexRedirects:  regexRedirects,
 	}, nil
 }
 
@@ -333,6 +381,7 @@ func configHash(config *Config) [sha256.Size]byte {
 		writeUint64(uint64(redirect.StatusCode))
 		writeBool(redirect.PreserveQueryString)
 		writeBool(redirect.SubpathMatching)
+		writeBool(redirect.Regex)
 	}
 
 	var result [sha256.Size]byte
@@ -345,6 +394,14 @@ func (bulkRedirects *BulkRedirects) ServeHTTP(rw http.ResponseWriter, req *http.
 	path := req.URL.EscapedPath()
 	if path == "" {
 		path = "/"
+	}
+
+	subject := host + path
+	for _, rule := range bulkRedirects.compiled.regexRedirects {
+		if rule.Pattern.MatchString(subject) {
+			redirect(rw, req, rule.Target, "")
+			return
+		}
 	}
 
 	if target, found := bulkRedirects.compiled.exactRedirects[buildKey(host, path)]; found {

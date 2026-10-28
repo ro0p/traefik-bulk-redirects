@@ -26,8 +26,8 @@ func BenchmarkNewSameConfig(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		var err error
 		benchmarkHandler, err = New(context.Background(), nextHandler(), config, "bulk-redirects")
 		if err != nil {
@@ -48,8 +48,8 @@ func BenchmarkNewEquivalentDifferentPointers(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for i := 0; b.Loop(); i++ {
 		var err error
 		benchmarkHandler, err = New(context.Background(), nextHandler(), configs[(i+1)%len(configs)], "bulk-redirects")
 		if err != nil {
@@ -62,8 +62,8 @@ func BenchmarkConfigHash(b *testing.B) {
 	config := benchmarkConfig(benchmarkRedirectCount)
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		benchmarkHash = configHash(config)
 	}
 }
@@ -72,8 +72,8 @@ func BenchmarkCompileRedirects(b *testing.B) {
 	config := benchmarkConfig(benchmarkRedirectCount)
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		var err error
 		benchmarkCompiled, err = compileRedirects(config.Redirects)
 		if err != nil {
@@ -115,8 +115,8 @@ func BenchmarkNewFileInitialLoad(b *testing.B) {
 	config := benchmarkFileConfig(b, benchmarkRedirectCount)
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		resetFileCache()
 		var err error
 		benchmarkHandler, err = New(context.Background(), nextHandler(), config, "bulk-redirects")
@@ -149,6 +149,10 @@ func benchmarkConfig(count int) *Config {
 			StatusCode:          http.StatusMovedPermanently,
 			PreserveQueryString: i%2 == 0,
 			SubpathMatching:     i%3 == 0,
+			Regex:               i%10 == 0,
+		}
+		if redirects[i].Regex {
+			redirects[i].SourceURL = `^benchmark\.example/regex/` + id + `$`
 		}
 	}
 
