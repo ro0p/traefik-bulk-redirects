@@ -3,7 +3,7 @@
 A Traefik middleware plugin for Cloudflare-style bulk redirects.
 It allows defining multiple redirects in a single Traefik Middleware configuration. The plugin supports exact redirects, subpath redirects, regular-expression matching, query string preservation, and configurable redirect status codes.
 
-# Redirect fields
+## Redirect fields
 
 | Key | Description |
 | --- | --- |
