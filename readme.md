@@ -24,12 +24,12 @@ Regex rules are evaluated before exact and subpath rules. The first matching reg
 
 For example, the following rule redirects both example.com and www.example.com to the same destination:
 
-yaml
+```yaml
 - sourceURL: 'https?://(www\.)?example\.com/old/?$'
   targetURL: https://example.com/new
   statusCode: 301
   regex: true
-
+```
 
 Regular expressions use Go's RE2 syntax. Features such as lookahead and lookbehind are not supported.
 
@@ -43,7 +43,7 @@ Inline mode
 
 Inline mode embeds redirects in the Middleware resource. It is selected when mode is omitted or set to inline.
 
-yaml
+```yaml
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -70,7 +70,7 @@ spec:
           statusCode: 301
           preserveQueryString: false
           regex: true
-
+```
 
 In YAML, quote regular expressions that contain backslashes. Single-quoted YAML strings preserve backslashes literally, avoiding errors such as found unknown escape character.
 
@@ -87,7 +87,7 @@ File contents are considered immutable for the lifetime of the Traefik process. 
 The path must be absolute. File mode accepts only regular files with a maximum size of 16 MiB (16,777,216 bytes). Directories, pipes, devices, sockets, and other special files are rejected.
 
 Redirect file
-json
+```json
 {
   "redirects": [
     {
@@ -107,12 +107,12 @@ json
     }
   ]
 }
-
+```
 
 In JSON strings, backslashes must be escaped as \\. Only the redirects field is accepted in this file. Configuration fields such as mode and filePath belong in the Middleware resource.
 
 Middleware
-yaml
+```yaml
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -122,6 +122,7 @@ spec:
     bulkRedirects:
       mode: file
       filePath: /etc/traefik/bulk-redirects/redirects.json
+```
 
 Kubernetes deployment example
 
@@ -129,20 +130,20 @@ The lifecycle described above is independent of the deployment platform. The plu
 
 A content-addressed ConfigMap can connect a rules change to the required Traefik rollout. For example, Kustomize adds a content hash to generated ConfigMap names by default:
 
-yaml
+```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 configMapGenerator:
   - name: bulk-redirect-rules
     files:
       - redirects.json
-
+```
 
 This produces a ConfigMap such as bulk-redirect-rules-<content-hash>.
 
 Reference the generated ConfigMap from the Traefik Deployment or HelmRelease. A Deployment fragment can use the generator's base name because Kustomize updates known ConfigMap references to the generated name:
 
-yaml
+```yaml
 spec:
   template:
     spec:
@@ -156,6 +157,7 @@ spec:
         - name: bulk-redirect-rules
           configMap:
             name: bulk-redirect-rules
+```
 
 Updating file-based rules
 
@@ -164,9 +166,10 @@ When redirects.json changes, Kustomize generates a different ConfigMap name. Pro
 Each new Traefik process starts with an empty plugin cache and loads the new ruleset on first use. Because HelmRelease is a custom resource, its nested ConfigMap references may require a Kustomize nameReference configuration rather than relying on the built-in Deployment field handling.
 
 Static configuration
-yaml
+```yaml
 experimental:
   plugins:
     bulkRedirects:
       moduleName: github.com/ro0p/traefik-bulk-redirects
       version: v0.0.1
+```
